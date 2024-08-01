@@ -1,33 +1,89 @@
-import { Client } from 'node-appwrite';
+import { Client, Databases, Query } from 'node-appwrite';
+import dotenv from 'dotenv';
 
-// This is your Appwrite function
-// It's executed each time we get a request
-export default async ({ req, res, log, error }) => {
-  // Why not try the Appwrite SDK?
-  //
-  // const client = new Client()
-  //    .setEndpoint('https://cloud.appwrite.io/v1')
-  //    .setProject(process.env.APPWRITE_FUNCTION_PROJECT_ID)
-  //    .setKey(process.env.APPWRITE_API_KEY);
+dotenv.config();
 
-  // You can log messages to the console
-  log('Hello, Logs!');
+export default async ({ req, res }) => {
+  const client = new Client()
+    .setEndpoint('https://cloud.appwrite.io/v1')
+    .setProject(process.env.APPWRITE_PROJECT_ID);
 
-  // If something goes wrong, log an error
-  error('Hello, Errors!');
+  const databases = new Databases(client);
 
-  // The `req` object contains the request data
   if (req.method === 'GET') {
-    // Send a response with the res object helpers
-    // `res.send()` dispatches a string back to the client
-    return res.send('Hello, World!');
-  }
+    const userId = req.query.userId;
 
-  // `res.json()` is a handy helper for sending JSON
-  return res.json({
-    motto: 'Build like a team of hundreds_',
-    learn: 'https://appwrite.io/docs',
-    connect: 'https://appwrite.io/discord',
-    getInspired: 'https://builtwith.appwrite.io',
-  });
+    try {
+      // fetch all todos
+      const todos = await databases.listDocuments(
+        process.env.APPWRITE_DATABASE_ID,
+        process.env.APPWRITE_COLLECTION_ID,
+        [Query.equal('userId', userId), Query.orderAsc('order')]
+      );
+
+      // separate todos by status
+      const statusCategories = {
+        todo: [],
+        doing: [],
+        review: [],
+        completed: [],
+      };
+
+      todos.documents.forEach((todo) => {
+        if (todo.status.toLowerCase() in statusCategories) {
+          statusCategories[todo.status.toLowerCase()].push(todo);
+        }
+      });
+
+      // update order based on offset value
+      const updateOrder = (todos, offset = 100) => {
+        return todos.map((todo, index) => {
+          todo.order = (index + 1) * offset;
+          return todo;
+        });
+      };
+
+      // update order for each category
+      statusCategories.todo = updateOrder(statusCategories.todo);
+      statusCategories.doing = updateOrder(statusCategories.doing);
+      statusCategories.review = updateOrder(statusCategories.review);
+      statusCategories.completed = updateOrder(statusCategories.completed);
+
+      // flatten the updated todos array
+      const updatedTodos = [
+        ...statusCategories.todo,
+        ...statusCategories.doing,
+        ...statusCategories.review,
+        ...statusCategories.completed,
+      ];
+
+      // array to store the latest updated todos
+      const latestUpdatedTodos = [];
+
+      // update each todo in the database
+      for (const todo of updatedTodos) {
+        const document = await databases.updateDocument(
+          process.env.APPWRITE_DATABASE_ID,
+          process.env.APPWRITE_COLLECTION_ID,
+          todo.$id,
+          {
+            order: todo.order,
+          }
+        );
+        latestUpdatedTodos.push(document);
+      }
+
+      return res.json({
+        success: true,
+        message: 'Order fields updated successfully',
+        updatedTodos: latestUpdatedTodos,
+      });
+    } catch (error) {
+      return res.json({
+        success: false,
+        message: 'Failed to update order fields',
+        error: error.message,
+      });
+    }
+  }
 };
